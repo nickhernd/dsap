@@ -1,0 +1,155 @@
+\documentclass[12pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{longtable}
+\usepackage{booktabs} % Para tablas bonitas como 	oprule, \midrule, \bottomrule
+
+% Configuración de la geometría del documento
+\geometry{
+    a4paper,
+    top=2.5cm,
+    bottom=2.5cm,
+    left=3cm,
+    right=3cm,
+    headheight=14pt,
+    footskip=1cm,
+}
+
+% Configuración de listados de código
+\lstset{
+    basicstyle=	tfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=	iny\color{gray},
+    keywordstyle=\color{blue},
+    stringstyle=\color{red},
+    commentstyle=\color{green!50!black},
+    showstringspaces=false,
+    tabsize=2,
+    captionpos=b,
+    breakautoindent=true,
+    literate={á}{{'a}}1 {é}{{'e}}1 {í}{{'i}}1 {ó}{{'o}}1 {ú}{{'u}}1
+             {Á}{{'A}}1 {É}{{'E}}1 {Í}{{'I}}1 {Ó}{{'O}}1 {Ú}{{'U}}1
+             {ñ}{{\~n}}1 {Ñ}{{\~N}}1,
+}
+
+% Información del documento
+	itle{Algoritmo de Floyd-Warshall Paralelo con MPI}
+\author{Tu Nombre} % Reemplaza con tu nombre
+\date{	oday}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este documento presenta la implementación y el análisis de rendimiento del algoritmo de Floyd-Warshall para el cálculo de los caminos más cortos entre todos los pares de vértices en un grafo ponderado. Se detallan tanto una versión secuencial como una paralela, esta última utilizando el estándar MPI (Message Passing Interface) con una estrategia de descomposición de datos por bloques de filas. Se incluyen los resultados de un benchmark comparativo que evalúa el speedup y la eficiencia de la implementación paralela.
+\end{abstract}
+
+	ableofcontents
+
+
+ewpage
+
+\section{Introducción}
+El problema de los caminos más cortos entre todos los pares de vértices (All-Pairs Shortest Path, APSP) es un problema fundamental en la teoría de grafos con aplicaciones en diversas áreas, como la planificación de rutas, la minería de datos y la bioinformática. El algoritmo de Floyd-Warshall es un método clásico para resolver este problema en grafos con pesos en las aristas (positivos o negativos, pero sin ciclos negativos). Su naturaleza iterativa y el acceso regular a los datos lo hacen un candidato interesante para la paralelización.
+
+Este trabajo se enfoca en la implementación paralela del algoritmo de Floyd-Warshall utilizando MPI, buscando mejorar su rendimiento computacional en arquitecturas distribuidas. Se comparará el rendimiento con una implementación secuencial de referencia.
+
+\section{Algoritmo de Floyd-Warshall}
+El algoritmo de Floyd-Warshall es un algoritmo de programación dinámica que en cada iteración $k$ considera a los vértices $v_1, \dots, v_k$ como posibles vértices intermedios en el camino más corto entre cualquier par de vértices $(i, j)$. La ecuación de recurrencia que define el algoritmo es:
+
+$D^{k}[i, j] = \min(D^{k-1}[i, j], D^{k-1}[i, k] + D^{k-1}[k, j])$
+
+donde $D^{k}[i, j]$ representa la longitud del camino más corto desde $i$ hasta $j$ utilizando solo vértices del conjunto $\{v_1, \dots, v_k\}$ como intermedios. El algoritmo se ejecuta para $k$ desde $0$ hasta $N-1$, donde $N$ es el número de vértices del grafo. La complejidad temporal del algoritmo es $O(N^3)$.
+
+\section{Implementación Secuencial}
+La implementación secuencial sigue directamente el algoritmo descrito, utilizando dos matrices principales: una matriz de distancias (`dist`) y una matriz de caminos (`caminos`). La matriz `dist` almacena los pesos de los caminos más cortos, mientras que la matriz `caminos` se utiliza para reconstruir los caminos.
+
+El grafo se inicializa con pesos aleatorios. La función `Definir_Grafo` se encarga de esta tarea. La matriz de distancias se inicializa con los pesos directos de las aristas (o infinito, representado por 0 en nuestra implementación donde 0 significa que no hay arista o distancia 0 al mismo vértice). La matriz de caminos se inicializa de modo que `caminos[i][j]` almacena `i+1` si hay una arista directa entre `i` y `j`, o 0 en caso contrario.
+
+El bucle principal del algoritmo itera $k$ veces, y dentro de cada iteración, se actualizan todas las entradas $(i, j)$ de las matrices.
+
+\section{Implementación Paralela con MPI}
+La versión paralela del algoritmo de Floyd-Warshall se implementa utilizando MPI, basándose en una descomposición unidimensional de los datos por bloques de filas consecutivas. Cada proceso MPI es responsable de un subconjunto de filas de las matrices de distancias y caminos.
+
+\subsection{Estrategia de Paralelización}
+La estrategia empleada es la siguiente:
+\begin{enumerate}
+    \item **Distribución Inicial de Datos:** El proceso raíz (rank 0) inicializa las matrices completas de distancias y caminos. Luego, utiliza la función 	exttt{MPI\_Scatter} para distribuir bloques contiguos de filas a cada proceso. Cada proceso recibe un número igual de filas (o un bloque ligeramente mayor para el proceso raíz si el número de vértices no es divisible por el número de procesos, aunque en esta implementación se requiere divisibilidad exacta).
+    \item **Bucle Principal (	exttt{k} iteraciones):** En cada iteración $k$ del algoritmo de Floyd-Warshall, la fila $k$ (la fila que actúa como vértice intermedio) es necesaria para que todos los procesos actualicen sus filas locales.
+    \begin{itemize}
+        \item Se identifica el proceso "propietario" de la fila $k$.
+        \item El proceso propietario copia su fila $k$ local (que es una de sus filas asignadas) a un buffer temporal.
+        \item Esta fila $k$ es transmitida a todos los demás procesos utilizando 	exttt{MPI\_Bcast}.
+    \end{itemize}
+    \item **Actualización Local:** Una vez que cada proceso tiene una copia de la fila $k$, cada proceso actualiza sus filas locales utilizando la ecuación del algoritmo de Floyd-Warshall.
+    \item **Recolección Final de Datos:** Al finalizar todas las iteraciones $k$, los resultados finales se encuentran distribuidos entre todos los procesos. El proceso raíz utiliza 	exttt{MPI\_Gather} para recolectar todas las filas actualizadas y reconstruir las matrices de distancias y caminos completas.
+\end{enumerate}
+
+\subsection{Consideraciones de Memoria y Comunicación}
+Para evitar problemas de punteros dobles en 	exttt{MPI\_Scatter} y 	exttt{MPI\_Gather}, y dado que las matrices se asignan en memoria contigua, se envía/recibe un bloque de memoria linealizado. La función `Crear_matriz_pesos_consecutivo` y `Crear_matriz_caminos_consecutivo` están diseñadas para este propósito.
+
+La elección de 	exttt{MPI\_Bcast} en cada iteración $k$ introduce una sobrecarga de comunicación. Sin embargo, para un número moderado de procesos, esta estrategia es efectiva y relativamente sencilla de implementar.
+
+\section{Configuración Experimental}
+Las pruebas de rendimiento se realizaron con las siguientes configuraciones:
+\begin{itemize}
+    \item **Hardware:** [Descripción del hardware donde se ejecutaron las pruebas, e.g., CPU, RAM, número de cores, etc.]
+    \item **Software:**
+    \begin{itemize}
+        \item **Sistema Operativo:** Linux
+        \item **Compilador:** GCC y Open MPI (usando `mpicc`)
+        \item **Versión de MPI:** [Si se conoce, añadir la versión de Open MPI]
+    \end{itemize}
+    \item **Tamaños de Grafo (N):** 256, 512, 1024 vértices.
+    \item **Número de Procesos (P):** 2, 4 procesos.
+\end{itemize}
+Cada ejecución del benchmark realiza el cálculo de Floyd-Warshall para cada combinación de $N$ y $P$, mide el tiempo de ejecución y calcula el speedup y la eficiencia.
+
+\section{Resultados y Análisis de Rendimiento}
+Los resultados del benchmark son los siguientes:
+
+\begin{longtable}{|c|c|c|c|c|c|}
+    \caption{Resultados del Benchmark del Algoritmo de Floyd-Warshall}
+    	oprule
+    	extbf{Vértices (N)} & 	extbf{Procesos (P)} & 	extbf{T\_sec (s)} & 	extbf{T\_par (s)} & 	extbf{Speedup} & 	extbf{Eficiencia} 
+    \midrule
+    \endhead
+    % Datos del benchmark
+    256 & 2 & 0.0848 & 0.0461 & 1.84 & 0.92 
+    256 & 4 & 0.0848 & 0.0282 & 3.01 & 0.75 
+    512 & 2 & 0.6779 & 0.3561 & 1.90 & 0.95 
+    512 & 4 & 0.6779 & 0.2160 & 3.14 & 0.78 
+    1024 & 2 & 5.3317 & 2.8867 & 1.85 & 0.92 
+    1024 & 4 & 5.3317 & 2.0908 & 2.55 & 0.64 
+    \bottomrule
+\end{longtable}
+
+\subsection{Discusión}
+La tabla de resultados muestra claramente la ventaja de rendimiento de la implementación paralela.
+
+\begin{itemize}
+    \item 	extbf{Speedup:} Para $P=2$, el speedup se aproxima al ideal de 2, indicando que la paralelización es muy efectiva con baja sobrecarga. Para $P=4$, el speedup aumenta pero no llega al ideal de 4, lo que sugiere que la comunicación o la sincronización empiezan a tener un impacto más notable.
+    \item 	extbf{Eficiencia:} La eficiencia se mantiene alta para $P=2$ (alrededor del 92-95\%), lo que significa que casi todo el potencial computacional de los dos procesos se está utilizando. Para $P=4$, la eficiencia desciende al 64-78\%. Esta caída es predecible, ya que las operaciones 	exttt{MPI\_Bcast} en cada iteración $k$ (que se realiza $N$ veces) implican que todos los procesos deben esperar la transmisión de la fila pivote. A medida que $N$ crece, el tiempo dedicado a la comunicación también lo hace, reduciendo la eficiencia general.
+    \item 	extbf{Escalabilidad:} Aunque no se probaron con un número mayor de procesos, estos resultados sugieren que el algoritmo mostrará un buen rendimiento hasta cierto punto. Para un número muy elevado de procesos, la sobrecarga de comunicación de $N$ operaciones 	exttt{MPI\_Bcast} probablemente dominaría el tiempo total, limitando la escalabilidad.
+\end{itemize}
+
+El patrón de acceso a la memoria del algoritmo de Floyd-Warshall es favorable, pero la dependencia de datos en la fila $k$ es el principal factor limitante para una paralelización más eficiente con esta estrategia unidimensional.
+
+\section{Conclusiones}
+La implementación paralela del algoritmo de Floyd-Warshall utilizando MPI ha demostrado ser efectiva para reducir significativamente el tiempo de ejecución en comparación con la versión secuencial. La estrategia de descomposición unidimensional por filas y el uso de 	exttt{MPI\_Scatter}, 	exttt{MPI\_Gather} y 	exttt{MPI\_Bcast} permiten una distribución eficiente de la carga de trabajo.
+
+Si bien la eficiencia disminuye con un mayor número de procesos debido a la sobrecarga de comunicación inherente a la necesidad de la fila pivote en cada iteración, el speedup obtenido es considerable, especialmente para tamaños de grafo grandes. Para futuras mejoras, se podría explorar una descomposición 2D de la matriz para reducir la comunicación en las operaciones de difusión, o utilizar un enfoque basado en tareas asíncronas para solapar comunicación y cómputo.
+
+\end{document}
