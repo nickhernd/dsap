@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
-#include <mpi.h>
 
 #define nmax 2048 // Aumentado para benchmarks más grandes
 

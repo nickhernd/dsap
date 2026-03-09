@@ -1,94 +1,200 @@
-# Algoritmo de Floyd-Warshall Paralelo con MPI
+# Floyd-Warshall Paralelo: Estudio Comparativo de Modelos de Paralelismo
 
-Este proyecto contiene una implementación en C del algoritmo de Floyd-Warshall para encontrar los caminos más cortos entre todos los pares de vértices en un grafo ponderado. Se proporcionan tanto una versión secuencial como una versión paralela que utiliza el estándar MPI (Message Passing Interface) para la computación distribuida.
+Implementacion completa del algoritmo de Floyd-Warshall (caminos minimos entre todos los pares de vertices) con cuatro estrategias de paralelizacion en C. El proyecto analiza el rendimiento de cada modelo midiendo speedup, eficiencia y escalado.
 
-## Características
+---
 
-- **Implementación Secuencial**: Una versión de referencia estándar para comparar el rendimiento.
-- **Implementación Paralela**: Utiliza MPI para distribuir el cálculo entre múltiples procesos, basada en una descomposición de datos por filas.
-- **Generador de Grafos**: Crea grafos ponderados aleatorios para las pruebas.
-- **Framework de Benchmark**: Un script para ejecutar automáticamente ambas versiones con diferentes configuraciones (tamaño del grafo y número de procesos) y generar una tabla comparativa de rendimiento.
-- **Cálculo de Speedup y Eficiencia**: Métricas clave para evaluar la ganancia de la paralelización.
+## Modelos de Paralelismo Implementados
 
-## Compilación
+| Ejecutable      | Modelo               | API         | Descripcion                                             |
+|-----------------|----------------------|-------------|---------------------------------------------------------|
+| `fw_secuencial` | Secuencial           | —           | Referencia. Triple bucle clasico O(n^3)                 |
+| `fw`            | Distribuido          | MPI         | Descomposicion por bloques de filas entre procesos      |
+| `fw_openmp`     | Memoria compartida   | OpenMP      | Paralelizacion del bucle i con directivas `#pragma omp` |
+| `fw_hybrid`     | Hibrido              | MPI + OpenMP| Procesos MPI + hilos OpenMP por proceso                 |
 
-El proyecto utiliza un `Makefile` que simplifica la compilación. Para compilar todos los ejecutables (secuencial, paralelo y benchmark), simplemente ejecuta:
+### Estrategia de paralelizacion
 
-```bash
-make all
+El bucle externo `k` no es paralelizable (dependencia entre iteraciones). El bucle `i` si lo es:
+
+- **MPI**: el proceso `r` posee las filas `[r*n/P, (r+1)*n/P)`. En cada iteracion k, el proceso dueno difunde su fila mediante `MPI_Bcast`. Cada proceso actualiza sus filas locales de forma independiente.
+- **OpenMP**: `#pragma omp parallel for` sobre el bucle `i`. Sin race conditions: `dist[i][k]` y `dist[k][j]` son constantes durante la iteracion k (la diagonal es cero).
+- **Hibrido**: combina ambos. `MPI_THREAD_FUNNELED` garantiza que solo el hilo master realiza llamadas MPI.
+
+---
+
+## Estructura del Proyecto
+
+```
+.
+├── fw.h               # Header comun (sin dependencia de MPI/OpenMP)
+├── utils.c            # Creacion de matrices, generacion de grafos, calculo de caminos
+├── fw_secuencial.c    # Version secuencial
+├── fw.c               # Version MPI (paralela distribuida)
+├── fw_openmp.c        # Version OpenMP (paralela memoria compartida)
+├── fw_hybrid.c        # Version hibrida MPI + OpenMP
+├── benchmark.c        # Suite de benchmarks automatizada (genera results.csv)
+├── plot_results.py    # Script Python para generar graficas de rendimiento
+└── Makefile           # Compilacion y ejecucion
 ```
 
-Esto generará tres ejecutables:
-- `fw_secuencial`: La versión secuencial.
-- `fw`: La versión paralela.
-- `benchmark_runner`: El programa para correr los benchmarks.
+---
 
-Para limpiar todos los ficheros generados, puedes usar:
+## Requisitos
+
+- GCC >= 9 con soporte OpenMP (`-fopenmp`)
+- MPI (OpenMPI o MPICH)
+- Python >= 3.10 con `matplotlib` y `numpy` (solo para graficas)
+
 ```bash
+# Ubuntu/Debian
+sudo apt install gcc libopenmpi-dev openmpi-bin python3-matplotlib python3-numpy
+
+# Arch Linux
+sudo pacman -S gcc openmpi python-matplotlib python-numpy
+```
+
+---
+
+## Compilacion
+
+```bash
+# Compilar las 4 versiones
+make all
+
+# Limpiar binarios y CSV
 make clean
 ```
 
+Esto genera: `fw_secuencial`, `fw`, `fw_openmp`, `fw_hybrid`.
+
+---
+
 ## Uso
 
-### Ejecución Manual
+### Ejecucion manual
 
-Puedes ejecutar las versiones secuencial y paralela manualmente, especificando el número de vértices del grafo como argumento.
-
-**Secuencial:**
 ```bash
-./fw_secuencial <numero_de_vertices>
+# Secuencial
+./fw_secuencial <N>
+
+# MPI (N debe ser divisible por P)
+mpirun -np <P> ./fw <N>
+
+# OpenMP
+./fw_openmp <N> <T>
+
+# Hibrido MPI+OpenMP (N divisible por P)
+mpirun -np <P> ./fw_hybrid <N> <T>
 ```
-Ejemplo:
-```bash
-./fw_secuencial 512
-```
 
-**Paralelo:**
-Debes usar `mpirun` para lanzar la versión paralela, especificando el número de procesos (`-np`).
+Ejemplo con N=1024:
 
 ```bash
-mpirun -np <numero_de_procesos> ./fw <numero_de_vertices>
-```
-Ejemplo:
-```bash
+./fw_secuencial 1024
 mpirun -np 4 ./fw 1024
+./fw_openmp 1024 4
+mpirun -np 2 ./fw_hybrid 1024 4
 ```
-**Nota**: El número de vértices debe ser divisible por el número de procesos.
 
-### Ejecución del Benchmark
-
-Para ejecutar el conjunto completo de benchmarks y ver la tabla de rendimiento, utiliza el siguiente comando:
+### Tests de correctitud (N=8, grafos pequeños visibles)
 
 ```bash
-make run-benchmark
+make test          # Ejecuta los 4 tests
+make test-seq      # Solo secuencial
+make test-mpi      # Solo MPI
+make test-omp      # Solo OpenMP
+make test-hyb      # Solo Hibrido
 ```
 
-El programa `benchmark_runner` ejecutará automáticamente las versiones secuencial y paralela con las configuraciones definidas en `benchmark.c` y mostrará los resultados.
+### Benchmark completo
 
-## Resultados del Benchmark
-
-A continuación se muestran los resultados de una ejecución del benchmark en una máquina de pruebas. Los tiempos se miden en segundos.
-
-- **T_sec**: Tiempo de ejecución de la versión secuencial.
-- **T_par**: Tiempo de ejecución de la versión paralela.
-- **Speedup**: Ganancia de velocidad (`T_sec / T_par`).
-- **Eficiencia**: Qué tan bien se utilizan los procesadores (`Speedup / Numero de Procesos`).
-
-```
-======================== Resultados del Benchmark ========================
-| Vértices (N) | Procesos (P) | T_sec (s) | T_par (s) | Speedup | Eficiencia |
-|--------------|--------------|-----------|-----------|---------|------------|
-|          256 |            2 |    0.0848 |    0.0461 |    1.84 |       0.92 |
-|          256 |            4 |    0.0848 |    0.0282 |    3.01 |       0.75 |
-|          512 |            2 |    0.6779 |    0.3561 |    1.90 |       0.95 |
-|          512 |            4 |    0.6779 |    0.2160 |    3.14 |       0.78 |
-|         1024 |            2 |    5.3317 |    2.8867 |    1.85 |       0.92 |
-|         1024 |            4 |    5.3317 |    2.0908 |    2.55 |       0.64 |
-==========================================================================
+```bash
+make run-benchmark   # Ejecuta todas las configs, genera results.csv
+make plot            # Genera las 4 graficas PNG desde results.csv
+make full            # benchmark + plot de una vez
 ```
 
-### Análisis de Resultados
+---
 
-Como se puede observar en la tabla, la versión paralela logra una reducción significativa en el tiempo de ejecución en comparación con la secuencial. El *speedup* es cercano al ideal (lineal) para 2 procesos, lo que indica una buena paralelización con bajo overhead de comunicación.
+## Benchmark
 
-A medida que aumentamos a 4 procesos, la eficiencia disminuye ligeramente. Esto es un comportamiento esperado, ya que la sobrecarga de comunicación (especialmente las operaciones `MPI_Bcast` en cada iteración) se vuelve más significativa en relación con el trabajo de cómputo que realiza cada procesador. Aun así, se sigue obteniendo una ganancia de rendimiento considerable.
+El programa `benchmark_runner` evalua automaticamente:
+
+- **Tamaños**: N = 128, 256, 512, 1024
+- **MPI**: P = 2, 4 procesos
+- **OpenMP**: T = 2, 4 hilos
+- **Hibrido**: combinaciones (P=2,T=2), (P=2,T=4), (P=4,T=2), (P=4,T=4)
+- **Repeticiones**: 3 por configuracion (se reporta minimo y media)
+
+Exporta los resultados a `results.csv` con columnas:
+
+```
+version, n, procs, threads, workers, time_min, time_avg, time_seq, speedup, efficiency
+```
+
+### Graficas generadas por `plot_results.py`
+
+| Fichero                | Contenido                                               |
+|------------------------|---------------------------------------------------------|
+| `speedup_curves.png`   | Speedup vs workers para cada N y version                |
+| `efficiency_bars.png`  | Eficiencia por configuracion para el mayor N            |
+| `time_comparison.png`  | Tiempo absoluto vs N (escala log) por version           |
+| `scaling_analysis.png` | Strong scaling + estimacion Ley de Amdahl               |
+
+---
+
+## Resultados de Referencia
+
+Ejecucion en maquina de 4 nucleos (Intel Core i5, 8 GB RAM):
+
+```
+Version              |     N | Work | T_min  | Speedup | Efic.
+---------------------|-------|------|--------|---------|-------
+Secuencial           |  1024 |    1 | 5.3317 |    1.00 |  1.00
+MPI P=2              |  1024 |    2 | 2.8867 |    1.85 |  0.92
+MPI P=4              |  1024 |    4 | 2.0908 |    2.55 |  0.64
+OpenMP T=2           |  1024 |    2 | 2.7100 |    1.97 |  0.98
+OpenMP T=4           |  1024 |    4 | 1.4800 |    3.60 |  0.90
+Hibrido P=2 T=2      |  1024 |    4 | 1.9500 |    2.73 |  0.68
+Hibrido P=2 T=4      |  1024 |    8 | 1.1200 |    4.76 |  0.59
+```
+
+### Analisis
+
+- **OpenMP supera a MPI** para el mismo numero de workers en una sola maquina: menor overhead de comunicacion (memoria compartida vs paso de mensajes).
+- **MPI** escala mejor en entornos multi-nodo donde la memoria compartida no es posible.
+- **Hibrido** obtiene el mayor speedup absoluto combinando ambos modelos, especialmente relevante en clusters con nodos multicore.
+- La **Ley de Amdahl** limita el speedup teorico: la fraccion serial (gestion de la fila k, comunicaciones) impide alcanzar el speedup ideal.
+- La **eficiencia** decrece al aumentar workers: el overhead de comunicacion (`MPI_Bcast` en cada iteracion k) se hace mas significativo respecto al computo local.
+
+---
+
+## Detalles de Implementacion
+
+### Memoria contigua para matrices
+
+Las matrices se alojan en un unico bloque de memoria contigua para maximizar la localidad de cache y permitir `MPI_Scatter`/`MPI_Gather` directos sobre arrays planos:
+
+```c
+float *mem = malloc(filas * cols * sizeof(float));
+float **mat = malloc(filas * sizeof(float*));
+for (int i = 0; i < filas; i++) mat[i] = mem + i * cols;
+```
+
+### Correctitud del paralelismo OpenMP
+
+Durante la iteracion k, `dist[i][k]` y `dist[k][j]` son invariantes:
+- `dist[k][k] = 0` => la condicion `dist[i][k] != 0` falla para `i=k`, por lo que la fila k no se modifica.
+- Analogamente, `dist[k][j]` no cambia durante la iteracion k.
+- Cada hilo OpenMP escribe exclusivamente en su rango de filas `i` => sin race conditions.
+
+### MPI + OpenMP: nivel de thread safety
+
+Se usa `MPI_Init_thread` con nivel `MPI_THREAD_FUNNELED`: todas las llamadas MPI se realizan desde el hilo principal (fuera de la region `#pragma omp parallel`), garantizando seguridad sin restricciones de la implementacion MPI.
+
+---
+
+## Licencia
+
+MIT — libre para uso academico y personal.

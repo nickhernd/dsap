@@ -1,61 +1,79 @@
-# Compilador de C para MPI
+# =============================================================================
+# Floyd-Warshall Paralelo - Estudio Comparativo de Modelos de Paralelismo
+# =============================================================================
+
+# Compiladores
 MPICC = mpicc
+CC    = gcc
 
-# Flags del compilador
-# -O3 para optimización máxima
-# -Wall para mostrar todos los warnings
-CFLAGS = -O3 -Wall -Wno-unused-function
+# Flags
+CFLAGS     = -O3 -Wall -Wno-unused-function
+OMPFLAGS   = -fopenmp
+MATHFLAG   = -lm
 
-# Nombres de los ejecutables
-TARGET_PARALELO = fw
-TARGET_SECUENCIAL = fw_secuencial
-TARGET_BENCHMARK = benchmark_runner
+# Ejecutables
+TARGET_SEQ    = fw_secuencial
+TARGET_MPI    = fw
+TARGET_OMP    = fw_openmp
+TARGET_HYB    = fw_hybrid
+TARGET_BENCH  = benchmark_runner
 
-# Ficheros fuente
-SOURCES_PARALELO = fw.c utils.c
-SOURCES_SECUENCIAL = fw_secuencial.c utils.c
-SOURCES_BENCHMARK = benchmark.c
+# Fuentes comunes de utilidades
+UTILS = utils.c
 
-# Regla principal por defecto: compila ambos
-all: $(TARGET_PARALELO) $(TARGET_SECUENCIAL)
+# ── Regla principal ──────────────────────────────────────────────────────────
+all: $(TARGET_SEQ) $(TARGET_MPI) $(TARGET_OMP) $(TARGET_HYB)
 
-# Regla para enlazar el programa paralelo
-$(TARGET_PARALELO): $(SOURCES_PARALELO)
-	$(MPICC) $(CFLAGS) -o $(TARGET_PARALELO) $(SOURCES_PARALELO) -lm
+# ── Versiones individuales ───────────────────────────────────────────────────
+$(TARGET_SEQ): fw_secuencial.c $(UTILS)
+	$(MPICC) $(CFLAGS) -o $@ $^ $(MATHFLAG)
 
-# Regla para enlazar el programa secuencial
-$(TARGET_SECUENCIAL): $(SOURCES_SECUENCIAL)
-	$(MPICC) $(CFLAGS) -o $(TARGET_SECUENCIAL) $(SOURCES_SECUENCIAL) -lm
+$(TARGET_MPI): fw.c $(UTILS)
+	$(MPICC) $(CFLAGS) -o $@ $^ $(MATHFLAG)
 
-# Regla para enlazar el programa de benchmark
-$(TARGET_BENCHMARK): $(SOURCES_BENCHMARK)
-	$(MPICC) $(CFLAGS) -o $(TARGET_BENCHMARK) $(SOURCES_BENCHMARK)
+$(TARGET_OMP): fw_openmp.c $(UTILS)
+	$(CC) $(CFLAGS) $(OMPFLAGS) -o $@ $^ $(MATHFLAG)
 
-# Regla para limpiar los ficheros generados
+$(TARGET_HYB): fw_hybrid.c $(UTILS)
+	$(MPICC) $(CFLAGS) $(OMPFLAGS) -o $@ $^ $(MATHFLAG)
+
+$(TARGET_BENCH): benchmark.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# ── Limpieza ─────────────────────────────────────────────────────────────────
 clean:
-	rm -f $(TARGET_PARALELO) $(TARGET_SECUENCIAL) $(TARGET_BENCHMARK) *.o
+	rm -f $(TARGET_SEQ) $(TARGET_MPI) $(TARGET_OMP) $(TARGET_HYB) \
+	      $(TARGET_BENCH) *.o results.csv
 
-# --- Reglas de Ejecución ---
+# ── Tests rapidos de correctitud ─────────────────────────────────────────────
+test-seq: $(TARGET_SEQ)
+	@echo "--- Test secuencial (n=8) ---"
+	echo "0 0" | ./$(TARGET_SEQ) 8
 
-# Regla para ejecutar una prueba pequeña y verificar la funcionalidad paralela
-test: $(TARGET_PARALELO)
-	@echo "--- Ejecutando prueba paralela con 4 procesos y un grafo de 8 vértices ---"
-	mpirun -np 4 ./$(TARGET_PARALELO) 8
+test-mpi: $(TARGET_MPI)
+	@echo "--- Test MPI 4 procesos (n=8) ---"
+	echo "0 0" | mpirun -np 4 ./$(TARGET_MPI) 8
 
-# Regla para una prueba de benchmark más grande
-benchmark: $(TARGET_PARALELO)
-	@echo "--- Ejecutando benchmark paralelo con 4 procesos y un grafo de 1024 vértices ---"
-	mpirun -np 4 ./$(TARGET_PARALELO) 1024
+test-omp: $(TARGET_OMP)
+	@echo "--- Test OpenMP 4 hilos (n=8) ---"
+	echo "0 0" | ./$(TARGET_OMP) 8 4
 
-# Regla para ejecutar la versión secuencial con un grafo de 1024 vértices
-run-seq: $(TARGET_SECUENCIAL)
-	@echo "--- Ejecutando benchmark secuencial con un grafo de 1024 vértices ---"
-	./$(TARGET_SECUENCIAL) 1024
+test-hyb: $(TARGET_HYB)
+	@echo "--- Test Hibrido 2 procs x 2 hilos (n=8) ---"
+	echo "0 0" | mpirun -np 2 ./$(TARGET_HYB) 8 2
 
-# Regla para ejecutar el benchmark completo
-run-benchmark: all $(TARGET_BENCHMARK)
-	@echo "--- Ejecutando el benchmark completo ---"
-	./$(TARGET_BENCHMARK)
+test: test-seq test-mpi test-omp test-hyb
 
-# Define las reglas que no corresponden a ficheros
-.PHONY: all clean test benchmark run-seq run-benchmark
+# ── Benchmark completo ───────────────────────────────────────────────────────
+run-benchmark: all $(TARGET_BENCH)
+	@echo "--- Benchmark completo (genera results.csv) ---"
+	./$(TARGET_BENCH)
+
+# ── Graficas (requiere Python + matplotlib) ──────────────────────────────────
+plot: results.csv
+	python3 plot_results.py
+
+# ── Shortcut: todo de una vez ────────────────────────────────────────────────
+full: run-benchmark plot
+
+.PHONY: all clean test test-seq test-mpi test-omp test-hyb run-benchmark plot full
